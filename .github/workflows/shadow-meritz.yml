@@ -90,10 +90,10 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ steps.record.outcome }}" = "success" ]; then
-            python run.py shadow-fetch --provider meritz --store "$SHADOW_DIR" > "$RUNNER_TEMP/qld/03-fetch.log" 2>&1
+            python scripts/meritz_shadow.py --store "$SHADOW_DIR" > "$RUNNER_TEMP/qld/03-fetch.log" 2>&1
           else
             echo "::warning::그림자 기록 브랜치를 받지 못해 읽기만 하고 기록하지 않습니다."
-            python run.py shadow-fetch --provider meritz > "$RUNNER_TEMP/qld/03-fetch.log" 2>&1
+            python scripts/meritz_shadow.py > "$RUNNER_TEMP/qld/03-fetch.log" 2>&1
           fi
 
       - name: 공식 자료가 들어온 세션 대조
