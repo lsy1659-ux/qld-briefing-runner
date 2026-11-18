@@ -1,0 +1,214 @@
+# QLD 아침 브리핑 — 공개 실행 전용 저장소.
+#
+# 이 저장소에는 «실행 순서» 만 있다. 전략 코드 · 자료 · 기록은 비공개 저장소
+# (APP_REPO)에 있고, 실행할 때마다 QLD_REPO_TOKEN 으로 읽어 온다.
+#
+# 공개 저장소의 실행 기록(로그)은 누구나 볼 수 있다. 그래서 모든 python 출력은
+# 러너 임시 폴더의 파일로만 보내고, 로그에는 단계 이름과 성공/실패만 남긴다.
+# 가격 · 신호 · 비중은 로그에 찍히지 않는다 (시세 재배포 금지 약관도 같은 이유).
+# 결과는 본인 텔레그램으로만 간다.
+#
+# 언제 도나: 주 신호는 외부 정시 예약이 `workflow_dispatch` 를 `scheduled=true` 로
+# 부르는 것이다 (GitHub 자체 예약은 몇 시간씩 늦은 적이 있다). 아래 schedule 은
+# 외부 예약이 죽었을 때의 예비다. 한 세션에 메시지는 한 번 — `--only-new` 가 기록을
+# 보고 이미 보낸 세션이면 조용히 끝난다.
+#
+# 안전: 쓰는 외부 액션은 GitHub 공식 checkout · setup-python 두 개뿐이고 커밋으로
+# 고정했다. pull_request 로는 절대 돌지 않는다 (남의 수정 요청이 비밀에 닿지 못한다).
+name: QLD Briefing Runner
+
+on:
+  schedule:
+    # 예비. 20:27 · 21:27 · 21:47 UTC (월~금) = 한국 05:27 · 06:27 · 06:47 (화~토), 01:27 UTC = 10:27.
+    - cron: '27 20 * * 1-5'
+    - cron: '27 21 * * 1-5'
+    - cron: '47 21 * * 1-5'
+    - cron: '27 1 * * 2-6'
+  workflow_dispatch:
+    inputs:
+      scheduled:
+        description: '외부 정시 예약이 부를 때 true — 한 세션에 한 번만 보낸다'
+        type: boolean
+        default: false
+      send:
+        description: '텔레그램으로 보내기 (끄면 기록만)'
+        type: boolean
+        default: true
+      test_banner:
+        description: '메시지 맨 위에 [TEST] 표시 (사람이 직접 누를 때만)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qld-briefing-runner
+  cancel-in-progress: false
+
+env:
+  APP_REPO: lsy1659-ux/qld-infinite-buy-backtest
+  RECORD_BRANCH: live-history
+  RECORD_DIR: .live-history
+  RECORD_FILE: data/live/history/signal_history.jsonl
+
+jobs:
+  briefing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      QLD_TELEGRAM_TOKEN: ${{ secrets.QLD_TELEGRAM_TOKEN }}
+      QLD_TELEGRAM_CHAT_ID: ${{ secrets.QLD_TELEGRAM_CHAT_ID }}
+      PYTHONIOENCODING: utf-8
+      # 정시 실행인가 — GitHub 예약이거나, 외부 예약이 scheduled=true 로 부른 것.
+      QLD_AUTO: ${{ github.event_name == 'schedule' || inputs.scheduled == true }}
+
+    steps:
+      - name: 비공개 저장소 접근 토큰 확인
+        env:
+          HAS_TOKEN: ${{ secrets.QLD_REPO_TOKEN != '' }}
+        run: |
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "::error::QLD_REPO_TOKEN 이 없습니다. Settings -> Secrets and variables -> Actions 에 넣어 주세요."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/qld"
+
+      - name: 코드 받기
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          repository: ${{ env.APP_REPO }}
+          token: ${{ secrets.QLD_REPO_TOKEN }}
+          persist-credentials: false
+
+      - name: 기록 받기
+        id: record
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          repository: ${{ env.APP_REPO }}
+          ref: ${{ env.RECORD_BRANCH }}
+          path: ${{ env.RECORD_DIR }}
+          token: ${{ secrets.QLD_REPO_TOKEN }}
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
+
+      - name: 필요한 것 설치
+        run: |
+          set -euo pipefail
+          python -m pip install -q --upgrade pip > "$RUNNER_TEMP/qld/01-install.log" 2>&1
+          python -m pip install -q -r requirements-lock.txt >> "$RUNNER_TEMP/qld/01-install.log" 2>&1
+
+      - name: 텔레그램 비밀 확인
+        id: creds
+        run: python scripts/cloud_briefing.py check-credentials > "$RUNNER_TEMP/qld/02-creds.log" 2>&1
+
+      - name: 이 세션이 아직 안 보냈나
+        id: pending
+        if: ${{ steps.record.outcome == 'success' }}
+        run: python scripts/cloud_briefing.py check-recorded "$RECORD_DIR/$RECORD_FILE" > "$RUNNER_TEMP/qld/03-pending.log" 2>&1
+
+      - name: 시세 받기
+        id: data
+        env:
+          # GitHub 예약일 때만 공급원 지연을 기다린다. 외부 예약은 몇 분 뒤 다시 부르므로 기다리지 않는다.
+          QLD_WAIT_MINUTES: ${{ github.event_name == 'schedule' && steps.pending.outputs.missing == 'true' && '60' || '0' }}
+        run: python run.py live-data --wait-minutes "$QLD_WAIT_MINUTES" > "$RUNNER_TEMP/qld/04-data.log" 2>&1
+
+      - name: 자료 점검
+        id: quality
+        run: python run.py live-status > "$RUNNER_TEMP/qld/05-quality.log" 2>&1
+
+      - name: 신호 전용인지 확인
+        run: python scripts/cloud_briefing.py assert-signal-only > "$RUNNER_TEMP/qld/06-signal-only.log" 2>&1
+
+      - name: 판단 · 기록 · 알림
+        id: decide
+        env:
+          QLD_SEND: ${{ steps.creds.outputs.configured == 'true' && (github.event_name == 'schedule' || inputs.scheduled == true || inputs.send == true) }}
+          QLD_RECORD: ${{ steps.record.outcome == 'success' }}
+          QLD_TEST_BANNER: ${{ github.event_name != 'schedule' && inputs.scheduled != true && inputs.test_banner == true }}
+        run: |
+          set -euo pipefail
+          ARGS="--no-update --daily-summary"
+          if [ "$QLD_TEST_BANNER" = "true" ]; then ARGS="$ARGS --test-banner"; fi
+          if [ "$QLD_RECORD" = "true" ]; then
+            ARGS="$ARGS --record-root $RECORD_DIR"
+            if [ "$QLD_AUTO" = "true" ]; then ARGS="$ARGS --only-new"; fi
+          else
+            echo "::warning::기록 브랜치를 받지 못해 이번 판단은 기록되지 않습니다."
+            ARGS="$ARGS --no-record"
+          fi
+          if [ "$QLD_SEND" = "true" ]; then
+            python run.py live $ARGS --notify telegram --send > "$RUNNER_TEMP/qld/07-decide.log" 2>&1
+          else
+            echo "::notice::보내지 않음 (텔레그램 비밀이 없거나 send=false). 기록은 남깁니다."
+            python run.py live $ARGS --notify console > "$RUNNER_TEMP/qld/07-decide.log" 2>&1
+          fi
+
+      - name: 실패를 텔레그램으로 알림
+        if: ${{ failure() && steps.decide.outcome != 'success' && steps.creds.outputs.configured == 'true' }}
+        env:
+          QLD_STAGE_DATA: ${{ steps.data.outcome }}
+          QLD_STAGE_QUALITY: ${{ steps.quality.outcome }}
+          QLD_STAGE_DECIDE: ${{ steps.decide.outcome }}
+        run: python scripts/cloud_briefing.py notify-failure "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > /dev/null 2>&1
+
+      - name: 실패한 단계의 마지막 줄을 텔레그램으로 (로그에는 남기지 않음)
+        if: ${{ failure() && steps.creds.outputs.configured == 'true' }}
+        run: |
+          python - > /dev/null 2>&1 <<'PY' || true
+          import glob, json, os, urllib.request
+          logs = sorted(glob.glob(os.path.join(os.environ['RUNNER_TEMP'], 'qld', '*.log')))
+          if logs:
+              name = os.path.basename(logs[-1])
+              with open(logs[-1], encoding='utf-8', errors='replace') as fh:
+                  tail = ''.join(fh.readlines()[-12:])[-1500:]
+              text = f'🔧 QLD 실행기 — {name} 마지막 줄 (디버그용 · 매매 지시 아님)\n\n{tail}'
+              body = json.dumps({'chat_id': os.environ['QLD_TELEGRAM_CHAT_ID'], 'text': text}).encode()
+              req = urllib.request.Request(
+                  f"https://api.telegram.org/bot{os.environ['QLD_TELEGRAM_TOKEN']}/sendMessage",
+                  data=body, headers={'Content-Type': 'application/json'})
+              urllib.request.urlopen(req, timeout=20).read()
+          PY
+
+      - name: 기록 검증
+        id: verify
+        if: ${{ !cancelled() && steps.record.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          git -C "$RECORD_DIR" show "HEAD:$RECORD_FILE" > "$RUNNER_TEMP/qld/baseline.jsonl" 2>/dev/null || : > "$RUNNER_TEMP/qld/baseline.jsonl"
+          python scripts/cloud_briefing.py verify-record "$RUNNER_TEMP/qld/baseline.jsonl" "$RECORD_DIR/$RECORD_FILE" > "$RUNNER_TEMP/qld/08-verify.log" 2>&1
+
+      - name: 기록 올리기 (덧붙이기만 · 강제 push 없음)
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' && steps.verify.outputs.added != '0' }}
+        env:
+          SESSIONS: ${{ steps.verify.outputs.sessions }}
+        run: |
+          set -euo pipefail
+          cd "$RECORD_DIR"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/live/history
+          if git diff --cached --quiet; then
+            echo "::notice::덧붙일 것이 없습니다."
+            exit 0
+          fi
+          git commit -q -m "기록: ${SESSIONS} (클라우드 신호전용)" \
+                        -m "공개 실행 저장소 ${{ github.repository }} 실행 ${{ github.run_id }} 에서 자동 추가했습니다." \
+                        -m "신호전용 기록이며 보유량·현금·주문수량은 포함하지 않습니다."
+          git push -q origin "HEAD:$RECORD_BRANCH" > /dev/null 2>&1
+
+      - name: 기록 없이 보낸 날은 빨간불
+        if: steps.record.outcome != 'success'
+        run: |
+          echo "::error::오늘 브리핑은 보냈지만 기록 브랜치를 받지 못해 기록되지 않았습니다."
+          exit 1
+
+      - name: 계좌 파일을 남기지 않음
+        if: always()
+        run: rm -f data/live/portfolio_state.local.json
