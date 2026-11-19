@@ -208,6 +208,7 @@ jobs:
       # 이번 실행이 새 세션을 기록한 경우에만 — 그래서 세션당 한 번이다. 메리츠 계좌를 조회만 해서
       # 주문 수량을 계산하고 텔레그램으로 한 통 더 보낸다. 실패해도 공식 알림 · 기록에는 영향이 없다.
       - name: 내 계좌 주문 수량 (선택 · 기본 꺼짐)
+        id: account
         if: ${{ !cancelled() && steps.creds.outputs.configured == 'true' && steps.push.outcome == 'success' && (vars.QLD_ACCOUNT_MODE == 'on' || vars.QLD_ACCOUNT_MODE == 'trade') }}
         continue-on-error: true
         env:
@@ -221,6 +222,10 @@ jobs:
           QLD_ACCOUNT_INCLUDE_KRW: ${{ vars.QLD_ACCOUNT_INCLUDE_KRW }}
           QLD_ACCOUNT_FEE_BPS: ${{ vars.QLD_ACCOUNT_FEE_BPS }}
         run: python scripts/account_brief.py --record "$RECORD_DIR/$RECORD_FILE" --send > "$RUNNER_TEMP/qld/09-account.log" 2>&1
+
+      - name: 내 계좌 결과 한 줄 (상태 · 오류 사유만 · 숫자 없음)
+        if: ${{ always() && steps.account.outcome != 'skipped' }}
+        run: grep -h '^account-brief:' "$RUNNER_TEMP/qld/09-account.log" 2>/dev/null | tail -1 || true
 
       - name: 기록 없이 보낸 날은 빨간불
         if: steps.record.outcome != 'success'

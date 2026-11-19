@@ -84,6 +84,10 @@ jobs:
       - name: 내 계좌 메시지 [TEST] 보내기
         run: python scripts/account_brief.py --record "$RECORD_DIR/$RECORD_FILE" --send --test-banner > "$RUNNER_TEMP/qld/03-account.log" 2>&1
 
+      - name: 결과 한 줄 (상태 · 오류 사유만 · 숫자 없음)
+        if: always()
+        run: grep -h '^account-brief:' "$RUNNER_TEMP/qld/03-account.log" 2>/dev/null | tail -1 || true
+
       - name: 계좌 파일을 남기지 않음
         if: always()
         run: rm -f data/live/portfolio_state.local.json
