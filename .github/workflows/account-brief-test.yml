@@ -31,6 +31,9 @@ jobs:
       QLD_TELEGRAM_CHAT_ID: ${{ secrets.QLD_TELEGRAM_CHAT_ID }}
       MERITZ_APP_KEY: ${{ secrets.MERITZ_APP_KEY }}
       MERITZ_APP_SECRET: ${{ secrets.MERITZ_APP_SECRET }}
+      # 계좌방 (두 번째 봇). 둘 다 있으면 그 방으로, 없으면 기존 알림방으로.
+      QLD_ACCOUNT_TELEGRAM_TOKEN: ${{ secrets.QLD_ACCOUNT_TELEGRAM_TOKEN }}
+      QLD_ACCOUNT_TELEGRAM_CHAT_ID: ${{ secrets.QLD_ACCOUNT_TELEGRAM_CHAT_ID }}
       QLD_ACCOUNT_BUDGET_USD: ${{ vars.QLD_ACCOUNT_BUDGET_USD }}
       QLD_ACCOUNT_INCLUDE_KRW: ${{ vars.QLD_ACCOUNT_INCLUDE_KRW }}
       QLD_ACCOUNT_FEE_BPS: ${{ vars.QLD_ACCOUNT_FEE_BPS }}

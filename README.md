@@ -48,6 +48,7 @@ QLD 아침 브리핑을 **돌리기만 하는** 공개 저장소입니다.
 | `QLD_REPO_TOKEN` | 비공개 저장소 하나만 읽고 기록 브랜치에 덧붙일 수 있는 토큰 (fine-grained · Contents 읽기/쓰기) |
 | `QLD_TELEGRAM_TOKEN` · `QLD_TELEGRAM_CHAT_ID` | 텔레그램 봇 (기존 값과 같음) |
 | `MERITZ_APP_KEY` · `MERITZ_APP_SECRET` | 메리츠증권 Open API (그림자 검증 · 선택 기능의 계좌 조회) |
+| `QLD_ACCOUNT_TELEGRAM_TOKEN` · `QLD_ACCOUNT_TELEGRAM_CHAT_ID` | (선택) 계좌방 — 계좌 전용 두 번째 봇. 둘 다 있으면 «내 계좌» 메시지는 이 방으로만, 없으면 기존 알림방으로 |
 
 비밀은 GitHub 가 암호화해 보관하고 로그 · 복제본(fork) · 수정 요청(pull request) 어디에도 넘어가지 않습니다.
 이 저장소는 `pull_request` 로 실행되지 않으며, 쓰는 외부 액션은 GitHub 공식 `checkout` · `setup-python` 둘을 커밋으로 고정한 것뿐입니다.
