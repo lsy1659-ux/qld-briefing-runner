@@ -17,6 +17,17 @@ QLD 아침 브리핑을 **돌리기만 하는** 공개 저장소입니다.
 | `watchdog.yml` | 오후에 오늘 기록이 없으면 텔레그램 경고 | 한국 14:27 |
 | `account-brief-test.yml` | «내 계좌» 메시지를 `[TEST]` 로 한 통 보내 보기 (켜기 전 확인용) | 직접 `Run workflow` 할 때만 |
 | `account-ledger.yml` | (선택) 실제 계좌의 QLD · TQQQ · QQQ 보유 · 체결을 비공개 브랜치 `account-history` 에 쌓기 | **꺼짐** — 직접 `Run workflow` 하거나 변수 `QLD_ACCOUNT_LEDGER=on` 일 때만 한국 06:50 |
+| `trade-approve.yml` | (선택) 승인형 자동 주문 — 계좌방에 승인 요청, «승인 코드» 로 답하면 MOC 로 냄 | **꺼짐** — 변수 `QLD_TRADE_MODE=dry\|approve` 일 때만. 외부 예약(뉴욕 평일 09:05~17:55 10분마다)은 켤 때 만듦 |
+
+### 승인형 자동 주문 (선택 · 기본 꺼짐)
+
+| 변수 | 값 | 뜻 |
+|---|---|---|
+| `QLD_TRADE_MODE` | `dry` / `approve` / 없음 | `dry` 시험(승인해도 주문 안 냄) · `approve` 실제 주문 · 없으면 꺼짐 |
+| `QLD_TRADE_MAX_USD` | 예: `500` | 하루 주문 총액 상한. `approve` 에는 꼭 필요. 넘으면 하나도 안 냄 |
+| `QLD_TRADE_PILOT` | `on` / 없음 | 종목마다 1주만 (첫 실전 시험용) |
+
+메리츠에는 모의투자 환경이 없습니다 — `approve` 를 켜면 실제 주문이 나갑니다. 켜는 순서는 비공개 저장소 `docs/AUTO_TRADE.md`.
 
 ### 내 계좌 주문 수량 (선택 · 기본 꺼짐)
 
