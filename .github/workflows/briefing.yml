@@ -185,6 +185,7 @@ jobs:
           python scripts/cloud_briefing.py verify-record "$RUNNER_TEMP/qld/baseline.jsonl" "$RECORD_DIR/$RECORD_FILE" > "$RUNNER_TEMP/qld/08-verify.log" 2>&1
 
       - name: 기록 올리기 (덧붙이기만 · 강제 push 없음)
+        id: push
         if: ${{ !cancelled() && steps.verify.outcome == 'success' && steps.verify.outputs.added != '0' }}
         env:
           SESSIONS: ${{ steps.verify.outputs.sessions }}
@@ -202,6 +203,21 @@ jobs:
                         -m "공개 실행 저장소 ${{ github.repository }} 실행 ${{ github.run_id }} 에서 자동 추가했습니다." \
                         -m "신호전용 기록이며 보유량·현금·주문수량은 포함하지 않습니다."
           git push -q origin "HEAD:$RECORD_BRANCH" > /dev/null 2>&1
+
+      # 선택 · 기본 꺼짐 (D-088). 저장소 변수 QLD_ACCOUNT_MODE 가 on(매 세션) · trade(조정하는 날만)일 때,
+      # 이번 실행이 새 세션을 기록한 경우에만 — 그래서 세션당 한 번이다. 메리츠 계좌를 조회만 해서
+      # 주문 수량을 계산하고 텔레그램으로 한 통 더 보낸다. 실패해도 공식 알림 · 기록에는 영향이 없다.
+      - name: 내 계좌 주문 수량 (선택 · 기본 꺼짐)
+        if: ${{ !cancelled() && steps.creds.outputs.configured == 'true' && steps.push.outcome == 'success' && (vars.QLD_ACCOUNT_MODE == 'on' || vars.QLD_ACCOUNT_MODE == 'trade') }}
+        continue-on-error: true
+        env:
+          MERITZ_APP_KEY: ${{ secrets.MERITZ_APP_KEY }}
+          MERITZ_APP_SECRET: ${{ secrets.MERITZ_APP_SECRET }}
+          QLD_ACCOUNT_MODE: ${{ vars.QLD_ACCOUNT_MODE }}
+          QLD_ACCOUNT_BUDGET_USD: ${{ vars.QLD_ACCOUNT_BUDGET_USD }}
+          QLD_ACCOUNT_INCLUDE_KRW: ${{ vars.QLD_ACCOUNT_INCLUDE_KRW }}
+          QLD_ACCOUNT_FEE_BPS: ${{ vars.QLD_ACCOUNT_FEE_BPS }}
+        run: python scripts/account_brief.py --record "$RECORD_DIR/$RECORD_FILE" --send > "$RUNNER_TEMP/qld/09-account.log" 2>&1
 
       - name: 기록 없이 보낸 날은 빨간불
         if: steps.record.outcome != 'success'
