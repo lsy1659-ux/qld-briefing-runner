@@ -20,7 +20,7 @@ env:
 jobs:
   watchdog:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
       QLD_TELEGRAM_TOKEN: ${{ secrets.QLD_TELEGRAM_TOKEN }}
       QLD_TELEGRAM_CHAT_ID: ${{ secrets.QLD_TELEGRAM_CHAT_ID }}
@@ -46,7 +46,7 @@ jobs:
           ref: ${{ env.RECORD_BRANCH }}
           path: ${{ env.RECORD_DIR }}
           token: ${{ secrets.QLD_REPO_TOKEN }}
-          persist-credentials: false
+          # 사후 점검 기록(delivery_log)을 덧붙여 올리므로 자격을 남긴다. 신호 기록 파일은 건드리지 않는다.
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
         with:
@@ -76,3 +76,37 @@ jobs:
       - name: 기록을 못 읽었으면 텔레그램으로 알림
         if: ${{ steps.record.outcome != 'success' && steps.creds.outputs.configured == 'true' }}
         run: python scripts/cloud_briefing.py notify-missing "" "${{ github.server_url }}/${{ github.repository }}/actions/workflows/briefing.yml" > /dev/null 2>&1
+
+      # D-090 사후 점검. 최근 5세션의 기록한 판단을 확정 종가(Yahoo)로 다시 판단해 맞대 본다.
+      # 빠른 길은 마감 직후 값(몇 센트 다를 수 있음)으로 판단하므로, 판단이 달라진 날이 있으면 알림방에 경고.
+      - name: 확정 종가 받기 (사후 점검용)
+        id: final
+        if: ${{ steps.record.outcome == 'success' }}
+        continue-on-error: true
+        run: python run.py live-data > "$RUNNER_TEMP/qld/04-data.log" 2>&1
+
+      - name: 빠른 종가 사후 점검 — 판단이 확정 종가로도 같았나
+        if: ${{ steps.final.outcome == 'success' && steps.creds.outputs.configured == 'true' }}
+        continue-on-error: true
+        run: python scripts/fast_close_check.py --record "$RECORD_DIR/$RECORD_FILE" --log "$RECORD_DIR/data/live/history/delivery_log.jsonl" --notify > "$RUNNER_TEMP/qld/05-fast-check.log" 2>&1
+
+      - name: 사후 점검 결과 한 줄 (상태만 · 숫자 없음)
+        if: always()
+        run: grep -h '^fast-check:' "$RUNNER_TEMP/qld/05-fast-check.log" 2>/dev/null | tail -1 || true
+
+      - name: 사후 점검 기록 올리기 (delivery_log 만 · 덧붙이기만)
+        if: ${{ always() && steps.record.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          LOG=data/live/history/delivery_log.jsonl
+          git -C "$RECORD_DIR" show "HEAD:$LOG" > "$RUNNER_TEMP/qld/base-delivery.jsonl" 2>/dev/null || : > "$RUNNER_TEMP/qld/base-delivery.jsonl"
+          python scripts/fast_briefing.py verify-log "$RUNNER_TEMP/qld/base-delivery.jsonl" "$RECORD_DIR/$LOG" > "$RUNNER_TEMP/qld/06-verify-log.log" 2>&1
+          cd "$RECORD_DIR"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$LOG"
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -q -m "사후 점검 기록 (확정 종가로 다시 판단 · 신호 기록 변화 없음)" \
+                        -m "공개 실행 저장소 ${{ github.repository }} 실행 ${{ github.run_id }}."
+          git pull -q --rebase origin "$RECORD_BRANCH" > /dev/null 2>&1
+          git push -q origin "HEAD:$RECORD_BRANCH" > /dev/null 2>&1

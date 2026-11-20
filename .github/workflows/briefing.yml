@@ -126,6 +126,24 @@ jobs:
       - name: 신호 전용인지 확인
         run: python scripts/cloud_briefing.py assert-signal-only > "$RUNNER_TEMP/qld/06-signal-only.log" 2>&1
 
+      # D-090. 메리츠가 «장 마감 · 그 세션 확정 일봉» 을 세 종목 모두 주고, 가격을 ±0.1% 흔들어도 판단이 같으면
+      # 뉴욕 16:20 을 기다리지 않고 공식 runner 로 바로 판단 · 기록 · 알림한다. 안 되면 아무것도 안 하고
+      # 아래 공식 길(Yahoo · 16:20)이 평소대로 보낸다. 끄기: 저장소 변수 QLD_FAST_CLOSE=off.
+      - name: 메리츠 확정 종가로 빠르게 (안 되면 16:20 공식 길 그대로)
+        id: fast
+        if: ${{ steps.record.outcome == 'success' && steps.creds.outputs.configured == 'true' && env.QLD_AUTO == 'true' && vars.QLD_FAST_CLOSE != 'off' }}
+        continue-on-error: true
+        # 메리츠가 응답 없이 멈추면 5분에 끊는다 — 그래도 아래 공식 길은 그대로 돈다.
+        timeout-minutes: 5
+        env:
+          MERITZ_APP_KEY: ${{ secrets.MERITZ_APP_KEY }}
+          MERITZ_APP_SECRET: ${{ secrets.MERITZ_APP_SECRET }}
+        run: python scripts/fast_briefing.py --record-root "$RECORD_DIR" --send > "$RUNNER_TEMP/qld/06b-fast.log" 2>&1
+
+      - name: 빠른 길 결과 한 줄 (상태만 · 숫자 없음)
+        if: ${{ always() && steps.fast.outcome != 'skipped' }}
+        run: grep -h '^fast-briefing:' "$RUNNER_TEMP/qld/06b-fast.log" 2>/dev/null | tail -1 || true
+
       - name: 판단 · 기록 · 알림
         id: decide
         env:
@@ -184,11 +202,21 @@ jobs:
           git -C "$RECORD_DIR" show "HEAD:$RECORD_FILE" > "$RUNNER_TEMP/qld/baseline.jsonl" 2>/dev/null || : > "$RUNNER_TEMP/qld/baseline.jsonl"
           python scripts/cloud_briefing.py verify-record "$RUNNER_TEMP/qld/baseline.jsonl" "$RECORD_DIR/$RECORD_FILE" > "$RUNNER_TEMP/qld/08-verify.log" 2>&1
 
+      - name: 빠른 길 기록 검증 (덧붙이기만 · 정해진 항목만)
+        id: verifylog
+        if: ${{ !cancelled() && steps.record.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          LOG=data/live/history/delivery_log.jsonl
+          git -C "$RECORD_DIR" show "HEAD:$LOG" > "$RUNNER_TEMP/qld/base-delivery.jsonl" 2>/dev/null || : > "$RUNNER_TEMP/qld/base-delivery.jsonl"
+          python scripts/fast_briefing.py verify-log "$RUNNER_TEMP/qld/base-delivery.jsonl" "$RECORD_DIR/$LOG" > "$RUNNER_TEMP/qld/08b-verify-log.log" 2>&1
+
       - name: 기록 올리기 (덧붙이기만 · 강제 push 없음)
         id: push
-        if: ${{ !cancelled() && steps.verify.outcome == 'success' && steps.verify.outputs.added != '0' }}
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' && steps.verifylog.outcome == 'success' }}
         env:
           SESSIONS: ${{ steps.verify.outputs.sessions }}
+          ADDED: ${{ steps.verify.outputs.added }}
         run: |
           set -euo pipefail
           cd "$RECORD_DIR"
@@ -196,20 +224,25 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add data/live/history
           if git diff --cached --quiet; then
-            echo "::notice::덧붙일 것이 없습니다."
             exit 0
           fi
-          git commit -q -m "기록: ${SESSIONS} (클라우드 신호전용)" \
-                        -m "공개 실행 저장소 ${{ github.repository }} 실행 ${{ github.run_id }} 에서 자동 추가했습니다." \
-                        -m "신호전용 기록이며 보유량·현금·주문수량은 포함하지 않습니다."
+          if [ "$ADDED" != "0" ]; then
+            git commit -q -m "기록: ${SESSIONS} (클라우드 신호전용)" \
+                          -m "공개 실행 저장소 ${{ github.repository }} 실행 ${{ github.run_id }} 에서 자동 추가했습니다." \
+                          -m "신호전용 기록이며 보유량·현금·주문수량은 포함하지 않습니다."
+          else
+            git commit -q -m "빠른 길 시도 기록 (신호 기록 변화 없음)" \
+                          -m "공개 실행 저장소 ${{ github.repository }} 실행 ${{ github.run_id }}."
+          fi
           git push -q origin "HEAD:$RECORD_BRANCH" > /dev/null 2>&1
+          if [ "$ADDED" != "0" ]; then echo "new_record=true" >> "$GITHUB_OUTPUT"; fi
 
       # 선택 · 기본 꺼짐 (D-088). 저장소 변수 QLD_ACCOUNT_MODE 가 on(매 세션) · trade(조정하는 날만)일 때,
       # 이번 실행이 새 세션을 기록한 경우에만 — 그래서 세션당 한 번이다. 메리츠 계좌를 조회만 해서
       # 주문 수량을 계산하고 텔레그램으로 한 통 더 보낸다. 실패해도 공식 알림 · 기록에는 영향이 없다.
       - name: 내 계좌 주문 수량 (선택 · 기본 꺼짐)
         id: account
-        if: ${{ !cancelled() && steps.creds.outputs.configured == 'true' && steps.push.outcome == 'success' && (vars.QLD_ACCOUNT_MODE == 'on' || vars.QLD_ACCOUNT_MODE == 'trade') }}
+        if: ${{ !cancelled() && steps.creds.outputs.configured == 'true' && steps.push.outputs.new_record == 'true' && (vars.QLD_ACCOUNT_MODE == 'on' || vars.QLD_ACCOUNT_MODE == 'trade') }}
         continue-on-error: true
         env:
           MERITZ_APP_KEY: ${{ secrets.MERITZ_APP_KEY }}
